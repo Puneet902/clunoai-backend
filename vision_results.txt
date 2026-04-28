@@ -1,0 +1,1 @@
+❌ meta-llama/llama-4-scout-17b-16e-instruct: Error code: 400 - {'error': {'message': 'invalid image data', 'type': 'invalid_request_error'}}

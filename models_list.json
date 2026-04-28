@@ -1,0 +1,23 @@
+[
+  "finetuned",
+  "allam-2-7b",
+  "meta-llama/llama-prompt-guard-2-22m",
+  "openai/gpt-oss-20b",
+  "groq/compound",
+  "meta-llama/llama-prompt-guard-2-86m",
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "meta-llama/llama-4-maverick-17b-128e-instruct",
+  "moonshotai/kimi-k2-instruct",
+  "openai/gpt-oss-120b",
+  "whisper-large-v3-turbo",
+  "llama-3.1-8b-instant",
+  "groq/compound-mini",
+  "whisper-large-v3",
+  "openai/gpt-oss-safeguard-20b",
+  "meta-llama/llama-guard-4-12b",
+  "canopylabs/orpheus-v1-english",
+  "moonshotai/kimi-k2-instruct-0905",
+  "qwen/qwen3-32b",
+  "canopylabs/orpheus-arabic-saudi",
+  "llama-3.3-70b-versatile"
+]

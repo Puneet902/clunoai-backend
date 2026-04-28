@@ -1,0 +1,31 @@
+# FastAPI server
+fastapi
+uvicorn[standard]
+
+# Environment variables
+python-dotenv
+
+# AI Integration
+google-generativeai
+groq
+anthropic
+
+# Speech-to-Text
+vosk
+openai
+
+# Audio processing (Server only needs processing, not capture)
+numpy
+scipy
+
+# HTTP requests
+requests
+
+# CORS
+python-multipart
+
+# PDF parsing
+PyPDF2
+
+# Image Processing
+Pillow

@@ -1,0 +1,203 @@
+"""
+AI Router Module (STRICT GROQ-ONLY)
+Handles routing strictly to Groq models as per user requirement.
+"""
+
+import os
+import json
+from typing import Generator
+from dotenv import load_dotenv
+from groq import Groq
+from prompt_builder import build_interview_prompt
+
+# Load environment variables
+load_dotenv()
+
+# Model Constants for Optimization
+FAST_MODEL = "llama-3.1-8b-instant"  # Super fast for utility tasks (<200ms)
+VERSATILE_MODEL = "llama-3.3-70b-versatile"  # High quality for complex answers
+VISION_MODEL = "llama-3.2-11b-vision-preview"  # For screen analysis
+
+
+class AIRouter:
+    """Routes questions strictly to Groq AI models."""
+    
+    def __init__(self):
+        """Initialize the AI Router with Groq."""
+        self._setup_groq()
+    
+    def _setup_groq(self):
+        """Configure Groq API."""
+        api_key = os.getenv("GROQ_API_KEY")
+        if api_key and api_key != "your_groq_api_key_here":
+            self.system_groq_client = Groq(api_key=api_key)
+            self.system_groq_available = True
+        else:
+            self.system_groq_client = None
+            self.system_groq_available = False
+            print("⚠️ AIRouter: GROQ_API_KEY is missing!")
+
+    def generate_answer(self, question: str, model: str = "groq", api_key: str = None, language: str = "python", system_prompt: str = None) -> str:
+        """
+        Generate an answer using Groq (forced).
+        """
+        return self._generate_with_groq(question, api_key, model, language, system_prompt)
+
+    def generate_answer_stream(self, question: str, model: str = "groq", api_key: str = None, language: str = "python", system_prompt: str = None) -> Generator[str, None, None]:
+        """
+        Generate a streaming answer using Groq (forced).
+        """
+        yield from self._generate_with_groq_stream(question, api_key, model, language, system_prompt)
+    
+    def generate_answer_from_image(self, image_data: str, prompt: str, api_key: str = None, model_id: str = "groq") -> str:
+        """
+        Generate answer from an image using Groq Vision.
+        """
+        if "base64," in image_data:
+            image_data = image_data.split("base64,")[1]
+
+        client = None
+        if api_key:
+            client = Groq(api_key=api_key)
+        elif self.system_groq_available:
+            client = self.system_groq_client
+            
+        if not client:
+            return "Groq API key not configured."
+            
+        try:
+            # Llama 3.2 90b Vision or Llama 3.2 11b Vision
+            vision_model = "llama-3.2-90b-vision-preview"
+            
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{image_data}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                model=vision_model,
+                temperature=0.3,
+                max_tokens=1024,
+            )
+            return chat_completion.choices[0].message.content
+        except Exception as e:
+            return f"Groq Vision Error: {str(e)}"
+
+    def generate_answer_from_image_stream(self, image_data: str, prompt: str, api_key: str = None, model_id: str = "groq") -> Generator[str, None, None]:
+        """
+        Stream answer from image using Groq.
+        """
+        res = self.generate_answer_from_image(image_data, prompt, api_key, model_id)
+        yield res
+
+    def _generate_with_groq(self, question: str, api_key: str = None, model_id: str = "llama-3.3-70b-versatile", language: str = "python", system_prompt: str = None) -> str:
+        """Generate an answer using Groq API."""
+        client = None
+        if api_key:
+            client = Groq(api_key=api_key)
+        elif self.system_groq_available:
+            client = self.system_groq_client
+            
+        if not client:
+            return "Groq API key not configured."
+        
+        # Use healthy defaults for Groq
+        groq_model = model_id if model_id and model_id != "groq" else "llama-3.3-70b-versatile"
+            
+        try:
+            if system_prompt:
+                sys_p, user_p = system_prompt, question
+            else:
+                sys_p, user_p = build_interview_prompt(question, language)
+            
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": sys_p},
+                    {"role": "user", "content": user_p}
+                ],
+                model=groq_model,
+                temperature=0.3,
+                max_tokens=900,
+            )
+            return chat_completion.choices[0].message.content
+        except Exception as e:
+            return f"Groq Error: {str(e)}"
+    
+    def _generate_with_groq_stream(self, question: str, api_key: str = None, model_id: str = "llama-3.3-70b-versatile", language: str = "python", system_prompt: str = None) -> Generator[str, None, None]:
+        """Stream answer from Groq."""
+        client = None
+        if api_key:
+            client = Groq(api_key=api_key)
+        elif self.system_groq_available:
+            client = self.system_groq_client
+            
+        if not client:
+            yield "Groq API key not configured."
+            return
+        
+        # Use healthy defaults for Groq
+        groq_model = model_id if model_id and model_id != "groq" else "llama-3.3-70b-versatile"
+
+        try:
+            if system_prompt:
+                sys_p, user_p = system_prompt, question
+            else:
+                sys_p, user_p = build_interview_prompt(question, language)
+            
+            stream = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": sys_p},
+                    {"role": "user", "content": user_p}
+                ],
+                model=groq_model,
+                temperature=0.3,
+                max_tokens=900,
+                stream=True,
+            )
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except Exception as e:
+            yield f"Groq Stream Error: {str(e)}"
+
+# Create singleton instance
+ai_router = AIRouter()
+
+def generate_answer(question: str, model: str = "groq", api_key: str = None, language: str = "python") -> str:
+    return ai_router.generate_answer(question, model, api_key, language)
+
+def generate_answer_stream(question: str, model: str = "groq", api_key: str = None, language: str = "python", system_prompt: str = None) -> Generator[str, None, None]:
+    return ai_router.generate_answer_stream(question, model, api_key, language, system_prompt=system_prompt)
+
+def generate_answer_from_image(image_data: str, prompt: str, model: str = "groq", api_key: str = None) -> str:
+    return ai_router.generate_answer_from_image(image_data, prompt, api_key=api_key, model_id=model)
+
+def generate_raw_prompt(prompt: str, model: str = "groq", api_key: str = None) -> str:
+    """Send raw prompt strictly to Groq."""
+    client = None
+    if api_key:
+        client = Groq(api_key=api_key)
+    elif ai_router.system_groq_available:
+        client = ai_router.system_groq_client
+    
+    if not client: return "Groq NOT configured."
+    
+    try:
+        model_to_use = model if model and model != "groq" else "llama-3.3-70b-versatile"
+        completion = client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model=model_to_use,
+            temperature=0.3
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        return f"Groq Error: {str(e)}"

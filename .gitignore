@@ -1,0 +1,52 @@
+# Node
+node_modules/
+**/node_modules/
+npm-debug.log
+yarn-error.log
+
+# Electron
+dist/
+**/dist/
+build/
+**/build/
+build_output/
+*.exe
+!website/public/InterviewAI-1.0.4.exe
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+env/
+venv/
+.venv/
+.env
+**/.env*
+
+# Vosk Models (large binary)
+vosk-model*/
+vosk-model.zip
+
+# Log files
+*.log
+server_log.txt
+ngrok_log.txt
+vite_log.txt
+
+# Test/temp files
+original_*.tmp
+test-checkout.html
+
+# OCR data
+*.traineddata
+
+# Debug captures
+debug_capture.png
+
+# MacOS
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
