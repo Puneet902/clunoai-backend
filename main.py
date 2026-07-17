@@ -131,9 +131,27 @@ class TranscribeAudioRequest(BaseModel):
     language: Optional[str] = "python"
     mode: Optional[str] = "full"
 
-class BackendAudioAnalyzeRequest(BaseModel):
-    model: Optional[str] = "groq"
-    language: Optional[str] = "python"
+def clean_extracted_question(extracted_text: str, raw_text: str) -> str:
+    if not extracted_text:
+        return raw_text
+    extracted_lower = extracted_text.lower()
+    refusal_keywords = [
+        "no question",
+        "cannot extract",
+        "can't extract",
+        "does not contain",
+        "isn't a question",
+        "without the rest of the transcript",
+        "provided transcript does not",
+        "cannot identify",
+        "no clear question",
+        "is not a question"
+    ]
+    if any(keyword in extracted_lower for keyword in refusal_keywords):
+        return raw_text
+    if len(extracted_text.strip()) < 5:
+        return raw_text
+    return extracted_text
 
 # --- Optimized Endpoints ---
 
@@ -177,15 +195,17 @@ async def api_analyze_backend_audio_stream(request: BackendAudioAnalyzeRequest):
                 question_text = raw_text
                 print("[INFO] Fast-Path Triggered: Using raw transcript as question")
             else:
-                extraction_prompt = f"Analyze the transcription and extract ONLY the precise question asked by the interviewer. Ignore the candidate's voice, background noise, fillers, or small talk. Return ONLY the clean question text.\n\nTRANSCRIPT: {raw_text}"
+                extraction_prompt = (
+                    "You are a transcription parser. Your task is to extract the precise interview question from the transcript.\n"
+                    "Rules:\n"
+                    "1. Extract ONLY the question asked by the interviewer.\n"
+                    "2. If no clear question is found, or if the transcript is too short or ambiguous, output the original transcript verbatim.\n"
+                    "3. Do NOT explain, do NOT apologize, and do NOT write notes. Output ONLY the question or the raw transcript.\n\n"
+                    f"TRANSCRIPT: {raw_text}"
+                )
                 question_text = generate_raw_prompt(extraction_prompt, model=FAST_MODEL).strip()
-                
-                # Fallback if extraction returns something too short or useless
-                if not question_text or len(question_text) < 10:
-                    print(f"[WARNING] Extraction returned weak result: '{question_text}'. Using raw transcript instead.")
-                    question_text = raw_text
-                else:
-                    print(f"[SUCCESS] Extracted via {FAST_MODEL}: {question_text[:60]}...")
+                question_text = clean_extracted_question(question_text, raw_text)
+                print(f"[SUCCESS] Extracted via {FAST_MODEL}: {question_text[:60]}...")
             
             yield f"data: {json.dumps({'type': 'question', 'content': question_text})}\n\n"
             
@@ -339,8 +359,16 @@ async def api_transcribe_and_stream(request: TranscribeAudioRequest):
                 print("⚡ [LATENCY] Fast-Path Triggered: Skipping extraction LLM")
             else:
                 # 5. Fast Extraction (using Instant model)
-                extraction_prompt = f"Analyze the transcription and extract ONLY the precise question asked by the interviewer. Ignore the candidate's voice, background noise, fillers, or small talk. Return ONLY the clean question text.\n\nTRANSCRIPT: {raw_text}"
+                extraction_prompt = (
+                    "You are a transcription parser. Your task is to extract the precise interview question from the transcript.\n"
+                    "Rules:\n"
+                    "1. Extract ONLY the question asked by the interviewer.\n"
+                    "2. If no clear question is found, or if the transcript is too short or ambiguous, output the original transcript verbatim.\n"
+                    "3. Do NOT explain, do NOT apologize, and do NOT write notes. Output ONLY the question or the raw transcript.\n\n"
+                    f"TRANSCRIPT: {raw_text}"
+                )
                 question_text = generate_raw_prompt(extraction_prompt, model=FAST_MODEL).strip()
+                question_text = clean_extracted_question(question_text, raw_text)
                 print(f"[SUCCESS] [LATENCY] Extracted via {FAST_MODEL}: {question_text[:60]}...")
             
             # Send question to client immediately
