@@ -131,6 +131,10 @@ class TranscribeAudioRequest(BaseModel):
     language: Optional[str] = "python"
     mode: Optional[str] = "full"
 
+class BackendAudioAnalyzeRequest(BaseModel):
+    model: Optional[str] = "groq"
+    language: Optional[str] = "python"
+
 def clean_extracted_question(extracted_text: str, raw_text: str) -> str:
     if not extracted_text:
         return raw_text
