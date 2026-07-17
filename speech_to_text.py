@@ -15,29 +15,45 @@ import base64
 from typing import Optional, Generator
 from dotenv import load_dotenv
 
+# Force UTF-8 output so emoji print() calls don't crash on Windows cp1252 console
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 load_dotenv()
 
 # Try to import pyaudiowpatch for WASAPI loopback (works with Bluetooth)
 try:
     import pyaudiowpatch as pyaudio
     WASAPI_AVAILABLE = True
-    print("✅ PyAudioWPatch loaded - WASAPI loopback available (Bluetooth support)")
+    print("[SUCCESS] PyAudioWPatch loaded - WASAPI loopback available (Bluetooth support)")
 except ImportError:
     try:
         import pyaudio
         WASAPI_AVAILABLE = False
-        print("⚠️ Using standard PyAudio - Bluetooth capture may not work")
+        print("[WARNING] Using standard PyAudio - Bluetooth capture may not work")
     except ImportError:
         pyaudio = None
         WASAPI_AVAILABLE = False
-        print("❌ PyAudio not available")
+        print("[ERROR] PyAudio not available")
+
+# Verify PyAudio can actually instantiate (fails on headless/cloud servers)
+if pyaudio is not None:
+    try:
+        _pa_test = pyaudio.PyAudio()
+        _pa_test.terminate()
+    except Exception as _pa_err:
+        print(f"⚠️ PyAudio module present but unusable (no audio devices): {_pa_err}")
+        pyaudio = None
+        WASAPI_AVAILABLE = False
 
 # Try to import Groq for Whisper
 try:
     from groq import Groq
     GROQ_AVAILABLE = bool(os.getenv("GROQ_API_KEY"))
     if GROQ_AVAILABLE:
-        print("✅ Groq Whisper API available (FREE & FAST!)")
+        print("[INFO] Groq Whisper API available (FREE & FAST!)")
 except ImportError:
     GROQ_AVAILABLE = False
 
@@ -98,10 +114,10 @@ class AdvancedSpeechToText:
         self.mic_rate = 16000
         self.mic_channels = 1
         
-        print("🎬 STT Engine: Initializing...")
+        print("\n--- AI INTERVIEW ASSISTANT - OPTIMIZED BACKEND v2.1 ---")
         self._find_audio_device()
         self._init_models()
-        print("🎬 STT Engine: Ready")
+        print("[INFO] STT Engine: Ready")
     
     def _init_models(self):
         """Initialize transcription models."""
@@ -114,38 +130,37 @@ class AdvancedSpeechToText:
             model_path = "vosk-model-small-en-us-0.15"
             if os.path.exists(model_path):
                 try:
-                    print(f"📦 Loading Vosk model from {model_path}...")
+                    print(f"[INFO] Loading Vosk model from {model_path}...")
                     self.vosk_model = Model(model_path)
-                    print("✅ Vosk loaded for real-time feedback")
+                    print("[SUCCESS] Vosk loaded for real-time feedback")
                 except Exception as e:
-                    print(f"⚠️ Vosk load failed: {e}")
+                    print(f"[WARNING] Vosk load failed: {e}")
 
     def _find_audio_device(self):
         """Analyze and select audio devices with exhaustive logging."""
         if not pyaudio: return
         try:
-            if self.pa is None: self.pa = pyaudio.PyAudio()
-            self.loopback_device = None
-            self.mic_device = None # Optional: if we find a better one than default
-            
-            source = os.getenv("AUDIO_SOURCE", "auto").lower()
-            env_mic = os.getenv("MIC_ID")
-            env_loop = os.getenv("LOOPBACK_ID")
-            
-            print("\n🔍 --- Audio Device Diagnostic ---")
-            
-            loopback_candidate = None
-            mic_candidate = None
-            
-            wasapi_api = None
-            if WASAPI_AVAILABLE:
+            if self.pa is None:
                 try:
-                    for i in range(self.pa.get_host_api_count()):
-                        api = self.pa.get_host_api_info_by_index(i)
-                        if api.get('type') == pyaudio.paWASAPI:
-                            wasapi_api = api
-                            break
-                except: pass
+                    self.pa = pyaudio.PyAudio()
+                except Exception as pa_init_err:
+                    print(f"[ERROR] PyAudio().init failed: {pa_init_err}")
+                    return
+            
+            self.loopback_device = None
+            self.mic_device = None
+            
+            print("\n[INFO] --- Audio Device Diagnostic ---")
+            
+            # Find WASAPI Host API index
+            wasapi_api_index = -1
+            try:
+                for i in range(self.pa.get_host_api_count()):
+                    api_info = self.pa.get_host_api_info_by_index(i)
+                    if api_info.get('type') == pyaudio.paWASAPI:
+                        wasapi_api_index = i
+                        break
+            except: pass
 
             for i in range(self.pa.get_device_count()):
                 try:
@@ -154,44 +169,63 @@ class AdvancedSpeechToText:
                     max_in = dev.get('maxInputChannels', 0)
                     is_loopback = dev.get('isLoopbackDevice', False)
                     rate = int(dev.get('defaultSampleRate', 0))
+                    api_idx = dev.get('hostApi')
                     
-                    # Print device info for user log
-                    print(f"Index {i}: {name} (MaxIn={max_in}, Loopback={is_loopback}, Rate={rate}Hz)")
+                    print(f"Index {i}: {name} (In={max_in}, Loopback={is_loopback}, Rate={rate}Hz, API={api_idx})")
                     
-                    # Look for loopback (System Audio)
-                    if source in ["auto", "system"] and is_loopback:
-                        if not loopback_candidate:
-                            loopback_candidate = i
+                    # PRIORITY: WASAPI Loopback device
+                    if is_loopback and (api_idx == wasapi_api_index or wasapi_api_index == -1):
+                        # Use the FIRST loopback device we find as primary
+                        if self.loopback_device is None:
+                            self.loopback_device = i
                             self.system_rate = rate
                             self.system_channels = max_in
-                            
-                    # Look for a good mic (especially if it matches a headset name)
-                    if source in ["auto", "microphone"] and max_in > 0 and not is_loopback:
-                        # Prioritize external mics/headsets over generic ones if possible
-                        if any(x in name.lower() for x in ["headset", "bluetooth", "usb", "mic"]):
-                            mic_candidate = i
+                            print(f"--- Found Loopback Device: {name}")
+
+                    # FALLBACK: Microphone
+                    if max_in > 0 and not is_loopback and self.mic_device is None:
+                        # Prioritize devices with 'mic' or 'headset' in name
+                        if any(x in name.lower() for x in ['mic', 'headset', 'usb']):
+                            self.mic_device = i
+                            self.mic_rate = rate
+                            self.mic_channels = max_in
+
                 except: pass
 
-            # Final Selection
-            self.loopback_device = int(env_loop) if env_loop else loopback_candidate
-            self.mic_device = int(env_mic) if env_mic else mic_candidate
-            
-            # Robust property discovery (handles explicit ID and Default)
-            try:
-                m_info = self.pa.get_device_info_by_index(self.mic_device) if self.mic_device is not None else self.pa.get_default_input_device_info()
-                self.mic_rate = int(m_info.get('defaultSampleRate', 16000))
-                self.mic_channels = int(m_info.get('maxInputChannels', 1))
-            except:
-                self.mic_rate = 16000
-                self.mic_channels = 1
-            
-            print(f"🎯 Selection: Loopback ID={self.loopback_device} ({self.system_rate}Hz), Mic ID={self.mic_device if self.mic_device is not None else 'Default'} ({self.mic_rate}Hz)")
-            if env_loop or env_mic:
-                print(f"💡 (Manual Overrides in use: LOOPBACK={env_loop}, MIC={env_mic})")
+            # Final Selection Logging
+            if self.loopback_device is not None:
+                print(f"[SUCCESS] Selected Loopback ID={self.loopback_device} ({self.system_rate}Hz)")
+            else:
+                print("[WARNING] No Loopback device found. Looking for Stereo Mix...")
+                # Try to find Stereo Mix if no explicit loopback
+                for i in range(self.pa.get_device_count()):
+                    try:
+                        dev = self.pa.get_device_info_by_index(i)
+                        if "stereo mix" in dev.get('name', '').lower():
+                            self.loopback_device = i
+                            self.system_rate = int(dev.get('defaultSampleRate'))
+                            self.system_channels = dev.get('maxInputChannels')
+                            print(f"[SUCCESS] Found Stereo Mix as Loopback: ID={i}")
+                            break
+                    except: pass
+
+            if self.loopback_device is None:
+                print("[WARNING] Falling back to default microphone.")
+                try:
+                    default_in = self.pa.get_default_input_device_info()
+                    self.mic_device = default_in.get('index')
+                    self.mic_rate = int(default_in.get('defaultSampleRate', 16000))
+                    self.mic_channels = int(default_in.get('maxInputChannels', 1))
+                except:
+                    print("[ERROR] No audio input devices found.")
             print("-----------------------------------\n")
             
         except Exception as e:
-            print(f"⚠️ Device search error: {e}")
+            print(f"[ERROR] _find_audio_device crash: {e}")
+            print("-----------------------------------\n")
+            
+        except Exception as e:
+            print(f"[ERROR] Device search error: {e}")
 
     def _audio_callback(self, in_data, frame_count, time_info, status):
         """System audio callback."""
@@ -212,7 +246,7 @@ class AdvancedSpeechToText:
         from scipy import signal
         
         try:
-            print(f"🎛 Mixer started ({'System' if self.stream else 'OFF'} + {'Mic' if self.mic_stream else 'OFF'})")
+            print(f"[INFO] Mixer started ({'System' if self.stream else 'OFF'} + {'Mic' if self.mic_stream else 'OFF'})")
             
             leftover_sys = np.array([], dtype=np.float32)
             leftover_mic = np.array([], dtype=np.float32)
@@ -267,7 +301,7 @@ class AdvancedSpeechToText:
                         if time.time() % 5 < 0.02:
                             sys_p = np.abs(leftover_sys[:available]).max()
                             mic_p = np.abs(leftover_mic[:available]).max()
-                            print(f"🧬 Audio Sync: Sys Peak={sys_p:.0f}, Mic Peak={mic_p:.0f}, Buffers: S={len(leftover_sys)} M={len(leftover_mic)}")
+                            print(f"[DEBUG] Audio Sync: Sys Peak={sys_p:.0f}, Mic Peak={mic_p:.0f}, Buffers: S={len(leftover_sys)} M={len(leftover_mic)}")
                             
                         mixed = leftover_sys[:available] + leftover_mic[:available]
                         self._store_and_feedback(mixed, len(leftover_mic) >= len(leftover_sys), leftover_mic[:available])
@@ -280,10 +314,10 @@ class AdvancedSpeechToText:
                         if self.stream: leftover_sys = np.array([], dtype=np.float32)
                         else: leftover_mic = np.array([], dtype=np.float32)
         except Exception:
-            print("❌ Mixer thread CRASHED:")
+            print("[ERROR] Mixer thread CRASHED:")
             traceback.print_exc()
         finally:
-            print("🎛 Mixer thread stopped")
+            print("[INFO] Mixer thread stopped")
 
     def _store_and_feedback(self, data_float32, source_is_mic=True, data_for_feedback=None):
         """Store audio and update feedback."""
@@ -330,17 +364,17 @@ class AdvancedSpeechToText:
 
     def get_current_transcript(self, api_key: str = None) -> str:
         """Transcribe recent buffer without stopping the stream (lasts ~10 mins max)."""
+        if not pyaudio: return ""
         with self._lock:
             if not self.audio_frames: return ""
-            # Calculate bytes for 10 minutes (16000Hz * 1ch * 2 bytes * 600s = 19.2MB)
-            # This ensures we stay under Groq/OpenAI's 25MB file limit.
-            max_bytes = 16000 * 1 * 2 * 600 
-            frames_to_use = self.audio_frames
-            
-            # Combine everything but keep an eye on size
+            max_bytes = 16000 * 1 * 2 * 600  # 10 min cap
+            frames_to_use = list(self.audio_frames)
+            self.audio_frames = []          # reset so next click = fresh question
+            self.accumulated_text = ""      # also clear Vosk accumulated text
+            self.text_buffer = ""
+
             raw_audio = b''.join(frames_to_use)
             if len(raw_audio) > max_bytes:
-                # Take only the LAST 10 minutes
                 raw_audio = raw_audio[-max_bytes:]
             
         # --- NORMALIZATION ---
@@ -371,21 +405,36 @@ class AdvancedSpeechToText:
     def start_listening(self) -> dict:
         """Start dual capture."""
         if self.is_listening: return {"success": False, "message": "Already listening"}
-        
+
+        # Cloud / Railway mode — no audio hardware available on server
+        # Desktop captures audio client-side and sends via /transcribe-and-stream
+        if not pyaudio:
+            self.is_listening = True
+            self.audio_frames = []
+            self.text_buffer = "Cloud mode - client captures audio"
+            print("[INFO] Cloud mode: no PyAudio, client-side capture in use")
+            return {"success": True, "message": "Cloud mode - client handles audio capture"}
+
         self.is_listening = True
         self.audio_frames = []
         self.system_queue = []
         self.mic_queue = []
         self.text_buffer = "Listening..."
-        
+
         try:
-            if self.pa is None: self.pa = pyaudio.PyAudio()
+            if self.pa is None:
+                try:
+                    self.pa = pyaudio.PyAudio()
+                except Exception as pa_err:
+                    print(f"[ERROR] Cannot init PyAudio (no audio HW): {pa_err} — switching to cloud mode")
+                    self.text_buffer = "Cloud mode - client captures audio"
+                    return {"success": True, "message": "Cloud mode - client handles audio capture"}
             source = os.getenv("AUDIO_SOURCE", "auto").lower()
             
             # Start System stream
             self.stream = None
             if source in ["auto", "system"] and self.loopback_device is not None:
-                print(f"🔌 Opening Loopback ({self.system_rate}Hz, {self.system_channels}ch)")
+                print(f"[INFO] Opening Loopback ({self.system_rate}Hz, {self.system_channels}ch)")
                 self.stream = self.pa.open(
                     format=pyaudio.paInt16, channels=self.system_channels,
                     rate=self.system_rate, input=True, input_device_index=self.loopback_device,
@@ -402,7 +451,7 @@ class AdvancedSpeechToText:
                     try: dev_name = self.pa.get_device_info_by_index(dev_idx)['name']
                     except: pass
                 
-                print(f"🎤 Opening Mic: {dev_name} (ID={dev_idx}, {self.mic_rate}Hz, {self.mic_channels}ch)")
+                print(f"[INFO] Opening Mic: {dev_name} (ID={dev_idx}, {self.mic_rate}Hz, {self.mic_channels}ch)")
                 try:
                     self.mic_stream = self.pa.open(
                         format=pyaudio.paInt16, channels=self.mic_channels, rate=self.mic_rate,
@@ -411,11 +460,11 @@ class AdvancedSpeechToText:
                     )
                 except Exception as me:
                     if "-9997" in str(me) or "sample rate" in str(me).lower():
-                        print(f"⚠️ Mic failed at {self.mic_rate}Hz, retrying NATIVE settings...")
+                        print(f"[WARNING] Mic failed at {self.mic_rate}Hz, retrying NATIVE settings...")
                         m_info = self.pa.get_device_info_by_index(dev_idx) if dev_idx is not None else self.pa.get_default_input_device_info()
                         self.mic_rate = int(m_info['defaultSampleRate'])
                         self.mic_channels = int(m_info['maxInputChannels'])
-                        print(f"🔄 Retrying Mic: {self.mic_rate}Hz, {self.mic_channels}ch")
+                        print(f"[INFO] Retrying Mic: {self.mic_rate}Hz, {self.mic_channels}ch")
                         self.mic_stream = self.pa.open(
                             format=pyaudio.paInt16, channels=self.mic_channels, rate=self.mic_rate,
                             input=True, input_device_index=dev_idx,
@@ -440,12 +489,15 @@ class AdvancedSpeechToText:
             return {"success": True, "message": f"Listening started ({'Mixed' if self.stream and self.mic_stream else 'Single'} Mode)"}
         except Exception as e:
             self.is_listening = False
-            print(f"❌ Start error: {e}")
+            print(f"[ERROR] Start error: {e}")
             return {"success": False, "message": str(e)}
 
     def stop_listening_and_get_text(self, api_key: str = None) -> dict:
         """Stop and transcribe."""
         if not self.is_listening: return {"success": False, "message": "Not listening", "text": ""}
+        if not pyaudio:
+            self.is_listening = False
+            return {"success": True, "message": "Cloud mode", "text": ""}
         self.is_listening = False
         
         if self.stream:
@@ -471,7 +523,7 @@ class AdvancedSpeechToText:
                 peak = np.abs(samples).max()
                 if peak > 0 and peak < 12000:
                     gain = min(20000.0 / peak, 8.0)
-                    print(f"🔊 Boosting final transcription: {gain:.1f}x")
+                    print(f"[INFO] Boosting final transcription: {gain:.1f}x")
                     samples = (samples * gain).clip(-32768, 32767)
                     raw_audio = samples.astype(np.int16).tobytes()
             except: pass
@@ -488,8 +540,10 @@ class AdvancedSpeechToText:
             wav_buffer.name = "audio.wav"
             
             text = self._transcribe(wav_buffer, api_key)
+            raw_text = get_current_transcript()
+            print(f"[INFO] [LATENCY] Backend Transcription: '{raw_text[:60]}...'")
             self.text_buffer = text
-            print(f"📝 Final Transcribed: {text}")
+            print(f"[INFO] Final Transcribed: {text}")
             return {"success": True, "message": "Done", "text": text}
 
     def _transcribe(self, audio_file, api_key: str = None) -> str:
@@ -504,7 +558,7 @@ class AdvancedSpeechToText:
             client = Groq(api_key=api_key) if api_key else Groq()
             # Use requested model or default to whisper-large-v3
             model = os.getenv("WHISPER_MODEL", "whisper-large-v3")
-            print(f"🎙️ Using Whisper Model: {model}")
+            print(f"[INFO] Using Whisper Model: {model}")
             # Use a prompt to help the model with technical interview context and grammar
             stt_prompt = "Technical job interview. Precise transcription of algorithms, system design, and coding concepts. Handle accents and minor speech errors gracefully while maintaining technical accuracy."
             transcript = client.audio.transcriptions.create(
@@ -515,7 +569,7 @@ class AdvancedSpeechToText:
             )
             return transcript.text
         except Exception as e:
-            print(f"❌ Groq error: {e}")
+            print(f"[ERROR] Groq error: {e}")
             return ""
 
     def _transcribe_openai(self, audio_file) -> str:
@@ -528,7 +582,7 @@ class AdvancedSpeechToText:
             )
             return transcript.text
         except Exception as e:
-            print(f"❌ OpenAI error: {e}")
+            print(f"[ERROR] OpenAI error: {e}")
             return ""
 
     def _transcribe_whisper_local(self, audio_file) -> str:
@@ -542,7 +596,7 @@ class AdvancedSpeechToText:
             except: pass
             return result["text"].strip()
         except Exception as e:
-            print(f"❌ Local Whisper error: {e}")
+            print(f"[ERROR] Local Whisper error: {e}")
             return ""
 
     def get_current_text(self, max_words: int = 3000) -> str:
@@ -565,7 +619,7 @@ class AdvancedSpeechToText:
             if getattr(self, 'recognizer', None) and self.vosk_model:
                 from vosk import KaldiRecognizer
                 self.recognizer = KaldiRecognizer(self.vosk_model, 16000)
-            print("🧹 Audio and Text buffers cleared")
+            print("[INFO] Audio and Text buffers cleared")
 
     def is_model_loaded(self) -> bool:
         return self.transcription_method is not None

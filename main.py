@@ -6,6 +6,13 @@ Optimized for sub-second latency (<1s).
 
 import os
 import sys
+
+# Force UTF-8 output so emoji print() calls don't crash on Windows cp1252 console
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 import json
 import base64
 import io
@@ -44,8 +51,8 @@ from fastapi.responses import JSONResponse
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
-    print(f"❌ [422 ERROR] Validation Failure: {exc.errors()}")
-    print(f"🔍 [422 ERROR] Request Body: {await request.body()}")
+    print(f"[ERROR] [422] Validation Failure: {exc.errors()}")
+    print(f"[DEBUG] [422] Request Body: {await request.body()}")
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 # Enable CORS
@@ -152,9 +159,10 @@ async def api_analyze_backend_audio_stream(request: BackendAudioAnalyzeRequest):
     """
     async def event_generator():
         try:
-            from speech_to_text import get_current_transcript
+            from speech_to_text import get_current_transcript, reset_buffer
             raw_text = get_current_transcript()
-            print(f"📝 [LATENCY] Backend Transcription: '{raw_text[:60]}...'")
+            reset_buffer()  # clear so next click = fresh question only
+            print(f"[INFO] [LATENCY] Backend Transcription: '{raw_text[:60]}...'")
 
             if not raw_text or len(raw_text) < 5:
                 yield f"data: {json.dumps({'type': 'error', 'content': 'No speech detected'})}\n\n"
@@ -162,16 +170,22 @@ async def api_analyze_backend_audio_stream(request: BackendAudioAnalyzeRequest):
 
             # FAST-PATH Extraction
             words = raw_text.split()
-            fast_path_triggers = ["what", "how", "why", "define", "explain", "describe", "difference", "can you"]
+            fast_path_triggers = ["what", "how", "why", "define", "explain", "describe", "difference", "can you", "write", "code", "implement", "solve", "program"]
             is_clear_question = raw_text.endswith('?') or any(raw_text.lower().startswith(t) for t in fast_path_triggers)
             
             if len(words) < 15 and is_clear_question:
                 question_text = raw_text
-                print("⚡ [LATENCY] Fast-Path Triggered: Skipping extraction LLM")
+                print("[INFO] Fast-Path Triggered: Using raw transcript as question")
             else:
                 extraction_prompt = f"Analyze the transcription and extract ONLY the precise question asked by the interviewer. Ignore the candidate's voice, background noise, fillers, or small talk. Return ONLY the clean question text.\n\nTRANSCRIPT: {raw_text}"
                 question_text = generate_raw_prompt(extraction_prompt, model=FAST_MODEL).strip()
-                print(f"🎯 [LATENCY] Extracted via {FAST_MODEL}: {question_text[:60]}...")
+                
+                # Fallback if extraction returns something too short or useless
+                if not question_text or len(question_text) < 10:
+                    print(f"[WARNING] Extraction returned weak result: '{question_text}'. Using raw transcript instead.")
+                    question_text = raw_text
+                else:
+                    print(f"[SUCCESS] Extracted via {FAST_MODEL}: {question_text[:60]}...")
             
             yield f"data: {json.dumps({'type': 'question', 'content': question_text})}\n\n"
             
@@ -209,58 +223,116 @@ async def api_transcribe_and_stream(request: TranscribeAudioRequest):
             if len(audio_bytes) < 500:
                 yield f"data: {json.dumps({'type': 'error', 'content': 'Audio too short'})}\n\n"
                 return
-            
-            # 2. Fast Normalization (In-Memory)
-            try:
-                with io.BytesIO(audio_bytes) as audio_io:
-                    with wave.open(audio_io, 'rb') as wf_in:
-                        params = wf_in.getparams()
-                        frames = wf_in.readframes(wf_in.getnframes())
-                
-                samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32)
-                peak = np.abs(samples).max()
-                
-                if peak < 5:
-                    yield f"data: {json.dumps({'type': 'error', 'content': 'No audio detected'})}\n\n"
-                    return
 
-                # Auto-gain if volume is low (< 40% of max)
-                if 0 < peak < 12000:
-                    gain = min(25000.0 / peak, 12.0)
-                    samples = (samples * gain).clip(-32768, 32767).astype(np.int16)
-                    frames = samples.tobytes()
-                
-                # Create memory buffer for Whisper
-                out_io = io.BytesIO()
-                with wave.open(out_io, 'wb') as wf_out:
-                    wf_out.setparams(params)
-                    wf_out.writeframes(frames)
-                out_io.seek(0)
-                audio_for_whisper = out_io.read()
-            except Exception as ae:
-                print(f"⚠️ Normalization failed: {ae}")
+            # 2. Determine format and pass raw bytes to Groq
+            # Groq Whisper accepts: mp3, mp4, mpeg, mpga, m4a, wav, webm, ogg, flac
+            # Browser MediaRecorder sends webm/opus — Groq handles it natively, no WAV conversion needed.
+            is_wav = audio_bytes[:4] == b'RIFF'
+            if is_wav:
+                # WAV: apply normalization for better accuracy
+                try:
+                    with io.BytesIO(audio_bytes) as audio_io:
+                        with wave.open(audio_io, 'rb') as wf_in:
+                            params = wf_in.getparams()
+                            frames = wf_in.readframes(wf_in.getnframes())
+                    samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32)
+                    peak = np.abs(samples).max()
+                    if peak < 5:
+                        yield f"data: {json.dumps({'type': 'error', 'content': 'No audio detected'})}\n\n"
+                        return
+                    if 0 < peak < 12000:
+                        gain = min(25000.0 / peak, 12.0)
+                        samples = (samples * gain).clip(-32768, 32767).astype(np.int16)
+                        frames = samples.tobytes()
+                    out_io = io.BytesIO()
+                    with wave.open(out_io, 'wb') as wf_out:
+                        wf_out.setparams(params)
+                        wf_out.writeframes(frames)
+                    out_io.seek(0)
+                    audio_for_whisper = out_io.read()
+                    audio_filename = "audio.wav"
+                except Exception as ae:
+                    print(f"[WARNING] WAV normalization failed: {ae}")
+                    audio_for_whisper = audio_bytes
+                    audio_filename = "audio.wav"
+            else:
+                # WebM/Opus from browser MediaRecorder — Groq accepts directly
                 audio_for_whisper = audio_bytes
+                audio_filename = "audio.webm"
+                print(f"[INFO] Received WebM audio ({len(audio_bytes)//1024}KB) from client")
             
             # 3. Transcribe with Groq Whisper
             groq_key = os.getenv("GROQ_API_KEY")
-            client = Groq(api_key=groq_key)
-            
-            transcript = client.audio.transcriptions.create(
-                model=os.getenv("WHISPER_MODEL", "whisper-large-v3"),
-                file=("audio.wav", audio_for_whisper),
-                language="en"
-            )
-            raw_text = transcript.text.strip()
+            groq_client = Groq(api_key=groq_key)
+            whisper_model = os.getenv("WHISPER_MODEL", "whisper-large-v3")
+
+            # Debug: Log first few bytes to verify header
+            magic = audio_for_whisper[:16].hex(' ')
+            print(f"[DEBUG] Audio Header (Hex): {magic}")
+            print(f"[INFO] Processing {audio_filename} ({len(audio_for_whisper)} bytes)")
+
+            raw_text = ""
+            try:
+                # Use a temporary file to ensure Groq/FFmpeg can read it properly
+                with tempfile.NamedTemporaryFile(suffix=os.path.splitext(audio_filename)[1], delete=False) as tmp:
+                    tmp.write(audio_for_whisper)
+                    tmp_path = tmp.name
+                
+                try:
+                    with open(tmp_path, "rb") as f:
+                        t = groq_client.audio.transcriptions.create(
+                            model=whisper_model,
+                            file=(audio_filename, f),
+                            language="en"
+                        )
+                    raw_text = t.text.strip()
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+
+            except Exception as e:
+                err_msg = str(e).lower()
+                print(f"[ERROR] Groq rejected {audio_filename}: {e}")
+                
+                if "no audio track" in err_msg:
+                    yield f"data: {json.dumps({'type': 'error', 'content': 'No audio track found. Please ensure you shared audio in the system dialog.'})}\n\n"
+                    return
+                
+                # Fallback: Try renaming to .mp3 and retry once
+                if not is_wav:
+                    try:
+                        print("Trying fallback as audio.mp3...")
+                        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+                            tmp.write(audio_for_whisper)
+                            tmp_path = tmp.name
+                        try:
+                            with open(tmp_path, "rb") as f:
+                                t = groq_client.audio.transcriptions.create(
+                                    model=whisper_model,
+                                    file=("audio.mp3", f),
+                                    language="en"
+                                )
+                            raw_text = t.text.strip()
+                            print("✅ Fallback accepted!")
+                        finally:
+                            if os.path.exists(tmp_path):
+                                os.remove(tmp_path)
+                    except:
+                        raise e
+                else:
+                    raise e
+
             print(f"📝 [LATENCY] Transcription: '{raw_text[:60]}...'")
 
             if not raw_text or len(raw_text) < 5:
+                yield f"data: {json.dumps({'type': 'error', 'content': 'No speech detected in audio'})}\n\n"
                 return
 
             # 4. FAST-PATH: Bypass extraction LLM for short/clear questions
             question_text = raw_text
             words = raw_text.split()
             
-            fast_path_triggers = ["what", "how", "why", "define", "explain", "describe", "difference", "can you"]
+            fast_path_triggers = ["what", "how", "why", "define", "explain", "describe", "difference", "can you", "write", "code", "implement", "solve", "program"]
             is_clear_question = raw_text.endswith('?') or any(raw_text.lower().startswith(t) for t in fast_path_triggers)
             
             if len(words) < 15 and is_clear_question:
@@ -269,7 +341,7 @@ async def api_transcribe_and_stream(request: TranscribeAudioRequest):
                 # 5. Fast Extraction (using Instant model)
                 extraction_prompt = f"Analyze the transcription and extract ONLY the precise question asked by the interviewer. Ignore the candidate's voice, background noise, fillers, or small talk. Return ONLY the clean question text.\n\nTRANSCRIPT: {raw_text}"
                 question_text = generate_raw_prompt(extraction_prompt, model=FAST_MODEL).strip()
-                print(f"🎯 [LATENCY] Extracted via {FAST_MODEL}: {question_text[:60]}...")
+                print(f"[SUCCESS] [LATENCY] Extracted via {FAST_MODEL}: {question_text[:60]}...")
             
             # Send question to client immediately
             yield f"data: {json.dumps({'type': 'question', 'content': question_text})}\n\n"
@@ -280,7 +352,7 @@ async def api_transcribe_and_stream(request: TranscribeAudioRequest):
                 
         except Exception as e:
             import traceback
-            print(f"❌ Transcribe error: {e}")
+            print(f"[ERROR] Transcribe error: {e}")
             traceback.print_exc()
             try:
                 yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
@@ -373,7 +445,7 @@ async def api_analyze_screen_stream(request: ScreenAnalyzeRequest):
 # Startup event
 @app.on_event("startup")
 async def startup_event():
-    print("\n🚀 AI INTERVIEW ASSISTANT - OPTIMIZED BACKEND v2.1")
+    print("\n--- AI INTERVIEW ASSISTANT - OPTIMIZED BACKEND v2.1 ---")
     print(f"GROQ_API_KEY: {'[READY]' if os.getenv('GROQ_API_KEY') else '[MISSING]'}")
     print(f"WHISPER_MODEL: {os.getenv('WHISPER_MODEL', 'whisper-large-v3')}")
     print("="*60 + "\n")

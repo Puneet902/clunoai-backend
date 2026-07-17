@@ -59,7 +59,9 @@ def classify_question(question: str) -> str:
     coding_triggers = [
         "write code", "write a function", "write a program", "implement", "solve", 
         "algorithm", "array", "linked list", "tree", "graph", "dp", "dynamic programming",
-        "binary search", "sorting", "recursion", "data structure", "leetcode", "hackerrank"
+        "binary search", "sorting", "recursion", "data structure", "leetcode", "hackerrank",
+        "dsa", "coding question", "code for", "solution for", "programming problem",
+        "show code", "example code", "how to implement", "write some code", "coding", "programming"
     ]
     for t in coding_triggers:
         if t in q_lower: return MODE_CODING
@@ -123,38 +125,47 @@ def build_interview_prompt(question: str, language: str = "python") -> tuple[str
     system_prompt = CORE_SYSTEM_PERSONA
     
     if mode == MODE_CODING:
-        system_prompt = """You are a senior engineer in a coding interview. Be concise and clear.
+        system_prompt = """You are a senior engineer in a coding interview. Your goal is to provide a clear explanation followed by complete, working code implementations.
 
-Your response must follow this EXACT STRUCTURE (keep each section short):
+Your response MUST follow this EXACT STRUCTURE:
 
 1. Approach (1 sentence + 2-3 bullet points max):
-   • State the core idea in one sentence.
-   • Mention time/space complexity briefly.
+   • State the core idea and logic in one sentence.
+   • Mention time/space complexity clearly (e.g., O(n) time, O(1) space).
 
-2. Code (ALL 4 languages, properly formatted — multi-line with correct indentation):
+2. Code Implementation (YOU MUST PROVIDE COMPLETE SOLUTIONS FOR ALL 4 LANGUAGES BELOW):
+   • Ensure code is clean, idiomatic, and properly indented.
+   • Use multi-line formatting for all blocks.
+
    ```python
+   # Complete Python solution
    def solution():
        pass
    ```
    ```cpp
+   // Complete C++ solution
    void solution() {
    }
    ```
    ```c
+   // Complete C solution
    void solution() {
    }
    ```
    ```java
-   void solution() {
+   // Complete Java solution
+   class Solution {
+       public void solution() {
+       }
    }
    ```
-   CRITICAL: Each code block MUST be multi-line with proper indentation. Never collapse to one line.
+   CRITICAL: You MUST provide the full implementation logic inside these blocks. Never leave them empty or as placeholders.
 
 3. Key Points (2-3 bullet points max):
    • One-line explanation of the core logic.
    • Edge cases or gotchas if any."""
 
-        user_prompt = f"Problem: {question}\n\nRespond with: Approach -> ALL 4 CODE BLOCKS (properly indented) -> Key Points. Keep it concise."
+        user_prompt = f"Problem: {question}\n\nRespond as the candidate. Provide the Approach, then THE FULL CODE SOLUTIONS for all 4 languages (Python, C++, C, Java), then Key Points. Ensure the code is complete and correctly indented. Be concise but thorough in the code logic."
 
     elif mode == MODE_BEHAVIORAL or mode == MODE_PERSONAL:
         user_prompt = f"{resume_context}\n\nQuestion: \"{question}\"\n\nRespond as the candidate ('I'). One short intro sentence, then 3-4 bullet points using real details from the resume. Keep every bullet to one line. No long paragraphs."

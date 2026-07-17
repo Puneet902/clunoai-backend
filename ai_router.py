@@ -35,7 +35,7 @@ class AIRouter:
         else:
             self.system_groq_client = None
             self.system_groq_available = False
-            print("⚠️ AIRouter: GROQ_API_KEY is missing!")
+            print("[WARNING] AIRouter: GROQ_API_KEY is missing!")
 
     def generate_answer(self, question: str, model: str = "groq", api_key: str = None, language: str = "python", system_prompt: str = None) -> str:
         """
