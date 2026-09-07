@@ -205,26 +205,9 @@ async def api_analyze_backend_audio_stream(request: BackendAudioAnalyzeRequest):
                 yield f"data: {json.dumps({'type': 'error', 'content': 'No speech detected'})}\n\n"
                 return
 
-            # FAST-PATH Extraction
-            words = raw_text.split()
-            fast_path_triggers = ["what", "how", "why", "define", "explain", "describe", "difference", "can you", "write", "code", "implement", "solve", "program"]
-            is_clear_question = raw_text.endswith('?') or any(raw_text.lower().startswith(t) for t in fast_path_triggers)
-            
-            if len(words) < 15 and is_clear_question:
-                question_text = raw_text
-                print("[INFO] Fast-Path Triggered: Using raw transcript as question")
-            else:
-                extraction_prompt = (
-                    "You are a transcription parser. Your task is to extract the precise interview question from the transcript.\n"
-                    "Rules:\n"
-                    "1. Extract ONLY the question asked by the interviewer.\n"
-                    "2. If no clear question is found, or if the transcript is too short or ambiguous, output the original transcript verbatim.\n"
-                    "3. Do NOT explain, do NOT apologize, and do NOT write notes. Output ONLY the question or the raw transcript.\n\n"
-                    f"TRANSCRIPT: {raw_text}"
-                )
-                question_text = generate_raw_prompt(extraction_prompt, model=FAST_MODEL).strip()
-                question_text = clean_extracted_question(question_text, raw_text)
-                print(f"[SUCCESS] Extracted via {FAST_MODEL}: {question_text[:60]}...")
+            # INSTANT FAST-PATH: Use transcription directly to eliminate extra LLM roundtrip delay (~2000ms saved)
+            question_text = clean_extracted_question(raw_text, raw_text)
+            print(f"⚡ [LATENCY] Direct Fast-Path: '{question_text[:60]}...'")
             
             yield f"data: {json.dumps({'type': 'question', 'content': question_text})}\n\n"
             
@@ -367,28 +350,9 @@ async def api_transcribe_and_stream(request: TranscribeAudioRequest):
                 yield f"data: {json.dumps({'type': 'error', 'content': 'No speech detected in audio'})}\n\n"
                 return
 
-            # 4. FAST-PATH: Bypass extraction LLM for short/clear questions
-            question_text = raw_text
-            words = raw_text.split()
-            
-            fast_path_triggers = ["what", "how", "why", "define", "explain", "describe", "difference", "can you", "write", "code", "implement", "solve", "program"]
-            is_clear_question = raw_text.endswith('?') or any(raw_text.lower().startswith(t) for t in fast_path_triggers)
-            
-            if len(words) < 15 and is_clear_question:
-                print("⚡ [LATENCY] Fast-Path Triggered: Skipping extraction LLM")
-            else:
-                # 5. Fast Extraction (using Instant model)
-                extraction_prompt = (
-                    "You are a transcription parser. Your task is to extract the precise interview question from the transcript.\n"
-                    "Rules:\n"
-                    "1. Extract ONLY the question asked by the interviewer.\n"
-                    "2. If no clear question is found, or if the transcript is too short or ambiguous, output the original transcript verbatim.\n"
-                    "3. Do NOT explain, do NOT apologize, and do NOT write notes. Output ONLY the question or the raw transcript.\n\n"
-                    f"TRANSCRIPT: {raw_text}"
-                )
-                question_text = generate_raw_prompt(extraction_prompt, model=FAST_MODEL).strip()
-                question_text = clean_extracted_question(question_text, raw_text)
-                print(f"[SUCCESS] [LATENCY] Extracted via {FAST_MODEL}: {question_text[:60]}...")
+            # 4. INSTANT FAST-PATH: Direct transcript processing (~2000ms saved)
+            question_text = clean_extracted_question(raw_text, raw_text)
+            print(f"⚡ [LATENCY] Direct Fast-Path: '{question_text[:60]}...'")
             
             # Send question to client immediately
             yield f"data: {json.dumps({'type': 'question', 'content': question_text})}\n\n"

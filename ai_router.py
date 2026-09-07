@@ -181,40 +181,32 @@ class AIRouter:
                 ],
                 model=groq_model,
                 temperature=0.3,
-                max_tokens=900,
+                max_tokens=500,
                 stream=True,
             )
-            buffer = ""
             in_think = False
             first_chunk = True
             for chunk in stream:
                 content = chunk.choices[0].delta.content
                 if not content:
                     continue
-                buffer += content
                 
-                if "<think>" in buffer and not in_think:
+                # Check for thinking blocks
+                if "<think>" in content:
                     in_think = True
-                if "</think>" in buffer:
-                    buffer = buffer.split("</think>")[-1]
+                    continue
+                if "</think>" in content:
                     in_think = False
+                    continue
+                if in_think:
+                    continue
                     
-                if not in_think:
-                    if first_chunk:
-                        if len(buffer) > 40 or "\n" in buffer:
-                            cleaned_part = clean_script_output(buffer)
-                            first_chunk = False
-                            buffer = ""
-                            if cleaned_part:
-                                yield cleaned_part
-                    else:
-                        yield buffer
-                        buffer = ""
-            if buffer and not in_think:
                 if first_chunk:
-                    yield clean_script_output(buffer)
-                else:
-                    yield buffer
+                    content = clean_script_output(content)
+                    first_chunk = False
+                    
+                if content:
+                    yield content
         except Exception as e:
             yield f"Groq Stream Error: {str(e)}"
 
