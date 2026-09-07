@@ -4,11 +4,30 @@ Handles routing strictly to Groq models as per user requirement.
 """
 
 import os
+import re
 import json
 from typing import Generator
 from dotenv import load_dotenv
 from groq import Groq
 from prompt_builder import build_interview_prompt
+
+def clean_script_output(text: str) -> str:
+    """Clean reasoning tags (<think>...</think>), preambles, and meta chatter from output."""
+    if not text:
+        return text
+    # Strip <think>...</think>
+    cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+    # Strip common meta preambles
+    preambles = [
+        r'^(here\s+is\s+(a\s+)?(natural\s+)?(spoken\s+)?(script|answer|response)[^\n]*\n?)',
+        r'^(sure[!,.]?\s*here[^\n]*\n?)',
+        r'^(certainly[!,.]?\s*here[^\n]*\n?)',
+        r'^(as\s+a\s+candidate[^\n]*\n?)',
+        r'^(hope\s+this\s+helps[^\n]*)'
+    ]
+    for p in preambles:
+        cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE).strip()
+    return cleaned
 
 # Load environment variables
 load_dotenv()
@@ -129,7 +148,8 @@ class AIRouter:
                 temperature=0.3,
                 max_tokens=900,
             )
-            return chat_completion.choices[0].message.content
+            raw_ans = chat_completion.choices[0].message.content
+            return clean_script_output(raw_ans)
         except Exception as e:
             return f"Groq Error: {str(e)}"
     
@@ -164,9 +184,37 @@ class AIRouter:
                 max_tokens=900,
                 stream=True,
             )
+            buffer = ""
+            in_think = False
+            first_chunk = True
             for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content
+                content = chunk.choices[0].delta.content
+                if not content:
+                    continue
+                buffer += content
+                
+                if "<think>" in buffer and not in_think:
+                    in_think = True
+                if "</think>" in buffer:
+                    buffer = buffer.split("</think>")[-1]
+                    in_think = False
+                    
+                if not in_think:
+                    if first_chunk:
+                        if len(buffer) > 40 or "\n" in buffer:
+                            cleaned_part = clean_script_output(buffer)
+                            first_chunk = False
+                            buffer = ""
+                            if cleaned_part:
+                                yield cleaned_part
+                    else:
+                        yield buffer
+                        buffer = ""
+            if buffer and not in_think:
+                if first_chunk:
+                    yield clean_script_output(buffer)
+                else:
+                    yield buffer
         except Exception as e:
             yield f"Groq Stream Error: {str(e)}"
 

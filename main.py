@@ -138,7 +138,21 @@ class BackendAudioAnalyzeRequest(BaseModel):
 def clean_extracted_question(extracted_text: str, raw_text: str) -> str:
     if not extracted_text:
         return raw_text
-    extracted_lower = extracted_text.lower()
+    
+    # Strip thinking tags (<think>...</think>)
+    cleaned = re.sub(r'<think>.*?</think>', '', extracted_text, flags=re.DOTALL).strip()
+    
+    # Strip meta prefixes from extraction models
+    meta_prefixes = [
+        r'^(the\s+)?(interview(er)?\s+)?(is\s+)?(asking|question|transcript)\s*(is)?:?\s*',
+        r'^(extracted\s+)?question:\s*',
+        r'^(here\s+is\s+the\s+question:?\s*)',
+        r'^["\']|["\']$'
+    ]
+    for prefix in meta_prefixes:
+        cleaned = re.sub(prefix, '', cleaned, flags=re.IGNORECASE).strip()
+        
+    extracted_lower = cleaned.lower()
     refusal_keywords = [
         "no question",
         "cannot extract",
@@ -153,9 +167,9 @@ def clean_extracted_question(extracted_text: str, raw_text: str) -> str:
     ]
     if any(keyword in extracted_lower for keyword in refusal_keywords):
         return raw_text
-    if len(extracted_text.strip()) < 5:
+    if len(cleaned) < 5:
         return raw_text
-    return extracted_text
+    return cleaned
 
 # --- Optimized Endpoints ---
 
