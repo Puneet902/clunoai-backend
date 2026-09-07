@@ -184,29 +184,39 @@ class AIRouter:
                 max_tokens=500,
                 stream=True,
             )
+            buffer = ""
             in_think = False
-            first_chunk = True
+            
             for chunk in stream:
                 content = chunk.choices[0].delta.content
                 if not content:
                     continue
                 
-                # Check for thinking blocks
-                if "<think>" in content:
+                buffer += content
+                
+                # Check for <think> block entry
+                if "<think>" in buffer and not in_think:
                     in_think = True
-                    continue
-                if "</think>" in content:
-                    in_think = False
-                    continue
+                
                 if in_think:
-                    continue
-                    
-                if first_chunk:
-                    content = clean_script_output(content)
-                    first_chunk = False
-                    
-                if content:
-                    yield content
+                    if "</think>" in buffer:
+                        # Exit think block and strip reasoning
+                        buffer = buffer.split("</think>", 1)[1]
+                        in_think = False
+                        cleaned = clean_script_output(buffer)
+                        if cleaned:
+                            yield cleaned
+                            buffer = ""
+                    else:
+                        # Still buffering inside <think> tag
+                        continue
+                else:
+                    # Normal streaming output (instant delivery)
+                    yield buffer
+                    buffer = ""
+
+            if buffer and not in_think:
+                yield buffer
         except Exception as e:
             yield f"Groq Stream Error: {str(e)}"
 
