@@ -14,8 +14,9 @@ from prompt_builder import build_interview_prompt
 load_dotenv()
 
 # Model Constants for Optimization
-FAST_MODEL = "llama-3.1-8b-instant"  # Super fast for utility tasks (<200ms)
-VERSATILE_MODEL = "llama-3.3-70b-versatile"  # High quality for complex answers
+DEFAULT_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.6-27b")
+FAST_MODEL = os.getenv("GROQ_FAST_MODEL", "qwen/qwen3.6-27b")
+VERSATILE_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.6-27b")
 VISION_MODEL = "llama-3.2-11b-vision-preview"  # For screen analysis
 
 
@@ -111,7 +112,7 @@ class AIRouter:
             return "Groq API key not configured."
         
         # Use healthy defaults for Groq
-        groq_model = model_id if model_id and model_id != "groq" else "llama-3.3-70b-versatile"
+        groq_model = model_id if model_id and model_id != "groq" else DEFAULT_MODEL
             
         try:
             if system_prompt:
@@ -145,7 +146,7 @@ class AIRouter:
             return
         
         # Use healthy defaults for Groq
-        groq_model = model_id if model_id and model_id != "groq" else "llama-3.3-70b-versatile"
+        groq_model = model_id if model_id and model_id != "groq" else DEFAULT_MODEL
 
         try:
             if system_prompt:
@@ -192,7 +193,7 @@ def generate_raw_prompt(prompt: str, model: str = "groq", api_key: str = None) -
     if not client: return "Groq NOT configured."
     
     try:
-        model_to_use = model if model and model != "groq" else "llama-3.3-70b-versatile"
+        model_to_use = model if model and model != "groq" else DEFAULT_MODEL
         completion = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model=model_to_use,
