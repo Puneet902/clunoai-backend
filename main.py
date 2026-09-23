@@ -39,6 +39,7 @@ from speech_to_text import (
 )
 from ai_router import (
     generate_answer_stream,
+    generate_answer_from_image_stream,
     FAST_MODEL,
     VERSATILE_MODEL,
 )
@@ -736,35 +737,65 @@ async def api_analyze_screen_stream(
     request: ScreenAnalyzeRequest,
 ):
     """
-    Stream an answer for already-extracted screen text.
-
-    Image OCR/extraction remains the responsibility of the caller,
-    preserving the existing screen-analysis flow.
+    Stream an answer for screen text or captured screen images.
     """
 
     async def event_generator():
         text_context = request.extracted_text
 
-        if not text_context:
+        if text_context:
+            yield sse(
+                "question",
+                text_context[:1000],
+            )
+
+            for chunk in generate_answer_stream(
+                text_context,
+                request.model,
+                None,
+                request.language,
+            ):
+                if chunk:
+                    yield sse("answer_chunk", chunk)
+
+            return
+
+        images = request.image_data_list or []
+
+        if request.image_data:
+            images = [request.image_data] + images
+
+        if not images:
             yield sse(
                 "error",
-                "No extracted screen text provided",
+                "No screen text or image provided",
             )
             return
 
-        yield sse(
-            "question",
-            text_context[:1000],
+        yield sse("question", "Screen Analysis")
+
+        prompt = (
+            "Analyze this screenshot. If it contains a coding problem, solve it "
+            f"in {request.language} and provide ONLY the code block and a very brief explanation. "
+            "If it contains a technical or interview question, answer it clearly and directly. "
+            "Do NOT include any conversational filler, greetings, or preambles like 'Here is the answer'. "
+            "If there is visible text, use it as the source of truth."
         )
 
-        for chunk in generate_answer_stream(
-            text_context,
-            request.model,
-            None,
-            request.language,
-        ):
-            if chunk:
-                yield sse("answer_chunk", chunk)
+        for index, image_data in enumerate(images):
+            if len(images) > 1:
+                yield sse(
+                    "answer_chunk",
+                    f"\n\nScreenshot {index + 1}:\n",
+                )
+
+            for chunk in generate_answer_from_image_stream(
+                image_data,
+                prompt,
+                request.model,
+            ):
+                if chunk:
+                    yield sse("answer_chunk", chunk)
 
     return StreamingResponse(
         event_generator(),

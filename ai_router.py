@@ -31,22 +31,22 @@ load_dotenv()
 
 DEFAULT_MODEL = os.getenv(
     "GROQ_MODEL",
-    "qwen/qwen3.6-27b",
+    "qwen/qwen3.8-27b",
 )
 
 FAST_MODEL = os.getenv(
     "GROQ_FAST_MODEL",
-    "qwen/qwen3.6-27b",
+    "qwen/qwen3.8-27b",
 )
 
 VERSATILE_MODEL = os.getenv(
     "GROQ_MODEL",
-    "qwen/qwen3.6-27b",
+    "qwen/qwen3.8-27b",
 )
 
 VISION_MODEL = os.getenv(
     "GROQ_VISION_MODEL",
-    "llama-3.2-90b-vision-preview",
+    "qwen/qwen3.8-27b",
 )
 
 
@@ -334,14 +334,56 @@ class AIRouter:
         api_key: str = None,
         model_id: str = "groq",
     ) -> Generator[str, None, None]:
-        result = self.generate_answer_from_image(
-            image_data,
-            prompt,
-            api_key,
-            model_id,
-        )
+        if "base64," in image_data:
+            image_data = image_data.split("base64,", 1)[1]
 
-        yield result
+        client = None
+
+        if api_key:
+            client = Groq(api_key=api_key)
+        elif self.system_groq_available:
+            client = self.system_groq_client
+
+        if not client:
+            yield "Groq API key not configured."
+            return
+
+        try:
+            stream = client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_data}"}},
+                        ],
+                    }
+                ],
+                model=VISION_MODEL,
+                temperature=0.3,
+                max_completion_tokens=1024,
+                stream=True,
+            )
+
+            sanitizer = StreamSanitizer()
+
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                
+                delta = chunk.choices[0].delta
+                content = getattr(delta, "content", None)
+                if content:
+                    safe_content = sanitizer.feed(content)
+                    if safe_content:
+                        yield safe_content
+            
+            remaining = sanitizer.flush()
+            if remaining:
+                yield remaining
+
+        except Exception as e:
+            yield f"Groq Vision Stream Error: {str(e)}"
 
     def _get_client(
         self,
@@ -566,6 +608,20 @@ def generate_answer_from_image(
     api_key: str = None,
 ) -> str:
     return ai_router.generate_answer_from_image(
+        image_data,
+        prompt,
+        api_key=api_key,
+        model_id=model,
+    )
+
+
+def generate_answer_from_image_stream(
+    image_data: str,
+    prompt: str,
+    model: str = "groq",
+    api_key: str = None,
+) -> Generator[str, None, None]:
+    return ai_router.generate_answer_from_image_stream(
         image_data,
         prompt,
         api_key=api_key,
